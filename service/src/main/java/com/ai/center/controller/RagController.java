@@ -9,24 +9,34 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
+@RequestMapping("/rag")
 public class RagController {
 
     @Autowired
     private RagService ragService;
 
     public record RagRequest(Document document) {}
-    @PostMapping("rag/add")
-    public String rag(@RequestBody RagRequest ragRequest) {
-        List<Document> documents = List.of(ragRequest.document());
-        ragService.addDocuments(documents);
-        return "success";
+    
+    @PostMapping("/add")
+    public Result<String> addDocument(@RequestBody RagRequest ragRequest) {
+        try {
+            List<Document> documents = List.of(ragRequest.document());
+            ragService.addDocuments(documents);
+            return Result.ok("文档添加成功");
+        } catch (Exception e) {
+            return Result.fail("添加文档失败: " + e.getMessage());
+        }
     }
 
-     @GetMapping("/rag/query")
-     public Result<List<Document>> query(@RequestParam("query") String query) {
-        return Result.ok(ragService.query(query));
-     }
-
-
-
+    @GetMapping("/query")
+    public Result<List<Document>> query(@RequestParam("query") String query) {
+        try {
+            if (query == null || query.trim().isEmpty()) {
+                return Result.fail(400, "查询内容不能为空");
+            }
+            return Result.ok(ragService.query(query));
+        } catch (Exception e) {
+            return Result.fail("查询失败: " + e.getMessage());
+        }
+    }
 }

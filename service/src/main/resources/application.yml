@@ -17,4 +17,5 @@ server:
   port: 8786
 comfyUi:
   base-url: http://216.250.104.100:18188
+  default-timeout: 600
 

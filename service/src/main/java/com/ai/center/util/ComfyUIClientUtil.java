@@ -9,8 +9,8 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
-import com.alibaba.fastjson2.JSONPath;
 import jakarta.annotation.PostConstruct;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.Resource;
@@ -21,13 +21,13 @@ import java.io.BufferedReader;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
 /**
  * ComfyUI 生图工具类（Hutool-HTTP + JSON文件工作流）
  */
+@Slf4j
 @Component
 public class ComfyUIClientUtil {
     // ComfyUI 基础地址
@@ -41,9 +41,21 @@ public class ComfyUIClientUtil {
 
     @Autowired
     private ResourceLoader resourceLoader;
+
     /**
      * 生图参数配置（仅需配置动态替换的参数，工作流由JSON文件定义）
      */
+
+    @PostConstruct
+    public void validateConfig() {
+        if (baseUrl == null || baseUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("ComfyUI base-url不能为空");
+        }
+        if (!baseUrl.startsWith("http://") && !baseUrl.startsWith("https://")) {
+            throw new IllegalArgumentException("ComfyUI base-url必须以http://或https://开头");
+        }
+        log.info("ComfyUI客户端初始化完成，服务地址: {}", baseUrl);
+    }
 
 
 
@@ -64,7 +76,8 @@ public class ComfyUIClientUtil {
                 flowStr.append(line);
             }
         } catch (IOException e) {
-            return null;
+            log.error("读取工作流文件失败: {}", imageWorkflowPath, e);
+            throw new RuntimeException("读取工作流文件失败: " + e.getMessage(), e);
         }
 
         // 2. 动态替换工作流中的参数（核心：适配通用工作流的JSONPath路径）
@@ -107,9 +120,10 @@ public class ComfyUIClientUtil {
                 throw new RuntimeException("响应中未获取到prompt_id: " + response.body());
             }
 
-            System.out.println("任务提交成功，prompt_id: " + promptId);
+            log.info("任务提交成功，prompt_id: {}", promptId);
             return promptId;
         } catch (Exception e) {
+            log.error("提交任务异常", e);
             throw new RuntimeException("提交任务异常: " + e.getMessage(), e);
         }
     }
@@ -130,7 +144,7 @@ public class ComfyUIClientUtil {
                     .execute();
 
             if (response.getStatus() != 200) {
-                System.out.println("查询任务状态失败，状态码: " + response.getStatus());
+                log.warn("查询任务状态失败，状态码: {}", response.getStatus());
                 return result;
             }
 
@@ -157,7 +171,7 @@ public class ComfyUIClientUtil {
             result.put("finished", true);
             result.put("images", imageNames);
         } catch (Exception e) {
-            System.out.println("查询任务状态异常: " + e.getMessage());
+            log.error("查询任务状态异常", e);
         }
         return result;
     }
@@ -179,7 +193,7 @@ public class ComfyUIClientUtil {
                         .execute();
 
                 if (response.getStatus() != 200) {
-                    System.out.println("下载图片失败，状态码: " + response.getStatus() + "，图片名: " + imgName);
+                    log.warn("下载图片失败，状态码: {}，图片名: {}", response.getStatus(), imgName);
                     continue;
                 }
 
@@ -187,12 +201,16 @@ public class ComfyUIClientUtil {
                 String savePath = StrUtil.format("{}/{}", saveDir, imgName);
                 try (FileOutputStream fos = new FileOutputStream(savePath)) {
                     IoUtil.copy(response.bodyStream(), fos);
+                    fos.flush();
+                } catch (IOException e) {
+                    FileUtil.del(savePath); // 删除可能损坏的文件
+                    throw new RuntimeException("保存图片失败: " + savePath, e);
                 }
 
                 savedPaths.add(savePath);
-                System.out.println("图片保存成功: " + savePath);
+                log.info("图片保存成功: {}", savePath);
             } catch (Exception e) {
-                System.out.println("下载图片异常 " + imgName + ": " + e.getMessage());
+                log.error("下载图片异常，图片名: {}", imgName, e);
             }
         }
         return savedPaths;
@@ -218,13 +236,14 @@ public class ComfyUIClientUtil {
             boolean finished = (boolean) status.get("finished");
 
             if (finished) {
+                @SuppressWarnings("unchecked")
                 List<String> imageNames = (List<String>) status.get("images");
                 if (imageNames.isEmpty()) {
-                    System.out.println("任务完成但未生成图片");
+                    log.warn("任务完成但未生成图片");
                     return Collections.emptyList();
                 }
                 List<String> imageResult = new ArrayList<>();
-                // 3. 下载图片
+                // 3. 返回图片URL
                 for (String imgName : imageNames) {
                     imageResult.add(baseUrl + "/view?filename=" + imgName);
                 }
@@ -237,12 +256,12 @@ public class ComfyUIClientUtil {
                 TimeUnit.SECONDS.sleep(2);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.out.println("任务等待被中断");
-                return Collections.emptyList();
+                log.warn("任务等待被中断: {}", e.getMessage());
+                throw new RuntimeException("任务被中断", e);
             }
 
             long elapsed = (System.currentTimeMillis() - startTime) / 1000;
-            System.out.println("等待任务完成... 已耗时 " + elapsed + " 秒");
+            log.info("等待任务完成... 已耗时 {} 秒", elapsed);
         }
 
         throw new RuntimeException("任务超时（超时时间: " + timeout + " 秒）");
