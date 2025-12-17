@@ -1,0 +1,20 @@
+
+spring:
+
+  ai:
+    ollama:
+      base-url: http://216.250.104.100:18080
+      embedding:
+        model: qwen3-embedding:4b
+    vectorstore:
+      qdrant:
+        host: 216.250.104.100
+        port: 6334
+        collection-name: rag_vector_store
+        use-tls: false
+        initialize-schema: true
+server:
+  port: 8786
+comfyUi:
+  base-url: http://216.250.104.100:18188
+
