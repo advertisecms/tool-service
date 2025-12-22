@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Coze API 交互面板</title>
+    <!-- 引入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入图标库 -->
+    <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
+    <!-- 配置 Tailwind 自定义样式 -->
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#4F6DF5',
+                        secondary: '#F5F7FA',
+                        assistant: '#E8F3FF',
+                        user: '#F0F8FF',
+                        dark: '#1F2937',
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'system-ui', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style type="text/tailwindcss">
+        @layer utilities {
+            .scrollbar-hide {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+            .scrollbar-hide::-webkit-scrollbar {
+                display: none;
+            }
+            .message-animation {
+                animation: fadeIn 0.3s ease-in-out;
+            }
+            @keyframes fadeIn {
+                from { opacity: 0; transform: translateY(5px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+        }
+    </style>
+</head>
+<body class="bg-gray-50 font-sans antialiased">
+<div class="max-w-4xl mx-auto flex flex-col h-screen">
+    <!-- 头部 -->
+    <header class="bg-white shadow-sm py-4 px-6">
+        <div class="flex justify-between items-center">
+            <h1 class="text-xl font-semibold text-dark flex items-center">
+                <i class="fa fa-comments-o mr-2 text-primary"></i>
+                Coze API 交互面板
+            </h1>
+            <!-- 模式切换 -->
+            <div class="flex items-center space-x-2">
+                <span class="text-sm text-gray-600">模式：</span>
+                <div class="relative inline-block w-10 h-5">
+                    <input type="checkbox" id="modeToggle" class="opacity-0 w-0 h-0 peer">
+                    <label for="modeToggle" class="cursor-pointer absolute inset-0 bg-gray-300 rounded-full peer peer-checked:bg-primary transition-colors"></label>
+                    <span class="absolute left-1 bottom-1 bg-white w-4 h-4 rounded-full transition-transform peer-checked:translate-x-5"></span>
+                </div>
+                <span id="modeText" class="text-sm font-medium text-gray-700">对话</span>
+            </div>
+        </div>
+        <!-- 配置面板 -->
+        <div class="mt-4 bg-gray-50 rounded-lg p-4">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                    <label class="block text-xs text-gray-600 mb-1">API Key</label>
+                    <input type="password" id="apiKey" placeholder="请输入 Coze API Key"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                </div>
+                <div id="botIdContainer">
+                    <label class="block text-xs text-gray-600 mb-1">Bot ID（对话模式）</label>
+                    <input type="text" id="botId" placeholder="请输入 Bot ID"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                </div>
+                <div id="workflowIdContainer" class="hidden">
+                    <label class="block text-xs text-gray-600 mb-1">工作流 ID</label>
+                    <input type="text" id="workflowId" placeholder="请输入工作流 ID"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                </div>
+                <div class="md:col-span-3">
+                    <label class="block text-xs text-gray-600 mb-1">Workspace ID</label>
+                    <input type="text" id="workspaceId" placeholder="请输入 Workspace ID"
+                           class="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary">
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- 消息列表 -->
+    <main class="flex-1 overflow-y-auto bg-white p-4 scrollbar-hide" id="messageContainer">
+        <div class="flex flex-col space-y-4 py-2">
+            <!-- 欢迎消息 -->
+            <div class="message-animation">
+                <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-sm">
+                        <i class="fa fa-robot"></i>
+                    </div>
+                    <div class="bg-assistant rounded-lg px-4 py-3 max-w-[80%]">
+                        <p class="text-sm text-gray-800">
+                            你好！我是 Coze 助手，支持对话和工作流两种交互模式。<br>
+                            请先配置 API Key、Workspace ID 及对应的 Bot ID/工作流 ID，然后输入消息开始交互。
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- 输入区域 -->
+    <footer class="bg-white border-t border-gray-200 p-4">
+        <form id="messageForm" class="flex flex-col space-y-3">
+            <div class="relative">
+                    <textarea id="messageInput" placeholder="请输入消息..." rows="3"
+                              class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary resize-none"></textarea>
+                <span class="absolute right-3 bottom-3 text-xs text-gray-500" id="charCount">0/2000</span>
+            </div>
+            <div class="flex justify-end">
+                <button type="submit" id="sendBtn"
+                        class="bg-primary hover:bg-primary/90 text-white px-6 py-2 rounded-md flex items-center transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
+                    <i class="fa fa-paper-plane-o mr-2"></i>
+                    <span>发送</span>
+                </button>
+            </div>
+        </form>
+    </footer>
+</div>
+
+<script>
+    // 核心变量
+    const messageContainer = document.getElementById('messageContainer');
+    const messageForm = document.getElementById('messageForm');
+    const messageInput = document.getElementById('messageInput');
+    const charCount = document.getElementById('charCount');
+    const sendBtn = document.getElementById('sendBtn');
+    const modeToggle = document.getElementById('modeToggle');
+    const modeText = document.getElementById('modeText');
+    const botIdContainer = document.getElementById('botIdContainer');
+    const workflowIdContainer = document.getElementById('workflowIdContainer');
+    const apiKey = document.getElementById('apiKey');
+    const botId = document.getElementById('botId');
+    const workflowId = document.getElementById('workflowId');
+    const workspaceId = document.getElementById('workspaceId');
+
+    // 模式切换
+    modeToggle.addEventListener('change', () => {
+        if (modeToggle.checked) {
+            modeText.textContent = '工作流';
+            botIdContainer.classList.add('hidden');
+            workflowIdContainer.classList.remove('hidden');
+        } else {
+            modeText.textContent = '对话';
+            botIdContainer.classList.remove('hidden');
+            workflowIdContainer.classList.add('hidden');
+        }
+    });
+
+    // 字符计数
+    messageInput.addEventListener('input', () => {
+        const length = messageInput.value.length;
+        charCount.textContent = `${length}/2000`;
+        // 超过限制禁用发送按钮
+        sendBtn.disabled = length > 2000 || length === 0;
+    });
+
+    // 渲染消息
+    function renderMessage(content, isUser = false) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'message-animation';
+
+        let avatarIcon = isUser ? 'fa-user' : 'fa-robot';
+        let avatarBg = isUser ? 'bg-gray-600' : 'bg-primary';
+        let messageBg = isUser ? 'bg-user' : 'bg-assistant';
+        let flexDirection = isUser ? 'flex-row-reverse' : 'flex-row';
+        let spaceX = isUser ? 'space-x-reverse' : 'space-x-3';
+
+        messageDiv.innerHTML = `
+                <div class="flex items-start ${flexDirection} ${spaceX}">
+                    <div class="w-8 h-8 rounded-full ${avatarBg} flex items-center justify-center text-white text-sm">
+                        <i class="fa ${avatarIcon}"></i>
+                    </div>
+                    <div class="${messageBg} rounded-lg px-4 py-3 max-w-[80%]">
+                        <p class="text-sm text-gray-800">${content}</p>
+                    </div>
+                </div>
+            `;
+
+        messageContainer.appendChild(messageDiv);
+        // 滚动到底部
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+    }
+
+    // 渲染加载状态
+    function renderLoading() {
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'message-animation';
+        loadingDiv.id = 'loadingMessage';
+
+        loadingDiv.innerHTML = `
+                <div class="flex items-start space-x-3">
+                    <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white text-sm">
+                        <i class="fa fa-robot"></i>
+                    </div>
+                    <div class="bg-assistant rounded-lg px-4 py-3 max-w-[80%]">
+                        <div class="flex space-x-2">
+                            <div class="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style="animation-delay: 0s"></div>
+                            <div class="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style="animation-delay: 0.2s"></div>
+                            <div class="w-2 h-2 rounded-full bg-gray-400 animate-bounce" style="animation-delay: 0.4s"></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+        messageContainer.appendChild(loadingDiv);
+        messageContainer.scrollTop = messageContainer.scrollHeight;
+    }
+
+    // 移除加载状态
+    function removeLoading() {
+        const loadingMessage = document.getElementById('loadingMessage');
+        if (loadingMessage) loadingMessage.remove();
+    }
+
+    // 验证配置
+    function validateConfig() {
+        if (!apiKey.value) {
+            alert('请输入 API Key');
+            return false;
+        }
+        if (!workspaceId.value) {
+            alert('请输入 Workspace ID');
+            return false;
+        }
+        if (modeToggle.checked) {
+            // 工作流模式
+            if (!workflowId.value) {
+                alert('请输入工作流 ID');
+                return false;
+            }
+        } else {
+            // 对话模式
+            if (!botId.value) {
+                alert('请输入 Bot ID');
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 调用 Coze API
+    async function callCozeApi(message) {
+        // 基础配置
+        const headers = {
+            'Authorization': `Bearer ${apiKey.value}`,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+            'Coze-Workspace-Id': workspaceId.value
+        };
+
+        try {
+            let response, data;
+            if (modeToggle.checked) {
+                // 工作流模式 API（参考 Coze 官方文档）
+                const workflowUrl = 'http://216.250.104.100:8888/v1/workflow/run';
+                const workflowBody = {
+                    workflow_id: workflowId.value,
+                    inputs: [
+                        {
+                            name: 'user_input', // 工作流输入参数名，需与你的工作流配置一致
+                            value: message
+                        }
+                    ],
+                    user: `user_${Date.now()}` // 自定义用户 ID
+                };
+
+                response = await fetch(workflowUrl, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(workflowBody)
+                });
+                data = await response.json();
+            } else {
+                // 对话模式 API
+                const chatUrl = 'http://216.250.104.100:8888/v1/chat/completions';
+                const chatBody = {
+                    bot_id: botId.value,
+                    user: `user_${Date.now()}`,
+                    messages: [
+                        {
+                            role: 'user',
+                            content: message
+                        }
+                    ],
+                    stream: false // 非流式响应，如需流式可改为 true 并处理
+                };
+
+                response = await fetch(chatUrl, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(chatBody)
+                });
+                data = await response.json();
+            }
+
+            if (!response.ok) {
+                throw new Error(`API 错误: ${data.error?.message || '未知错误'}`);
+            }
+
+            // 解析响应内容（根据 API 返回格式调整）
+            let replyContent = '';
+            if (modeToggle.checked) {
+                // 工作流响应解析
+                replyContent = data.data?.outputs?.[0]?.value || '工作流执行完成，但未返回内容';
+            } else {
+                // 对话响应解析
+                replyContent = data.choices?.[0]?.message?.content || '未获取到回复';
+            }
+
+            return replyContent;
+        } catch (error) {
+            console.error('API 调用失败:', error);
+            return `调用失败: ${error.message}`;
+        }
+    }
+
+    // 表单提交处理
+    messageForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const message = messageInput.value.trim();
+        if (!message) return;
+
+        // 验证配置
+        if (!validateConfig()) return;
+
+        // 渲染用户消息
+        renderMessage(message, true);
+
+        // 清空输入框
+        messageInput.value = '';
+        charCount.textContent = '0/2000';
+        sendBtn.disabled = true;
+
+        // 渲染加载状态
+        renderLoading();
+
+        // 调用 API
+        const reply = await callCozeApi(message);
+
+        // 移除加载状态
+        removeLoading();
+
+        // 渲染助手回复
+        renderMessage(reply);
+    });
+
+    // 初始化禁用发送按钮
+    sendBtn.disabled = true;
+
+    // 支持按 Enter 发送（Shift+Enter 换行）
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            messageForm.dispatchEvent(new Event('submit'));
+        }
+    });
+</script>
+</body>
+</html>

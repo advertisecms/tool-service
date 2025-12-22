@@ -7,6 +7,9 @@ import cn.hutool.core.util.IdUtil;
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
+import com.ai.center.model.AsyncTaskResponse;
+import com.ai.center.model.QueueStatusResponse;
+import com.ai.center.model.TaskStatusResponse;
 import com.alibaba.fastjson2.JSON;
 import com.alibaba.fastjson2.JSONObject;
 import jakarta.annotation.PostConstruct;
@@ -36,6 +39,9 @@ public class ComfyUIClientUtil {
     @Value("${comfyUi.workflow-path:comfyui_workflow/image.json}")
     private String imageWorkflowPath;
 
+    @Value("${comfyui.default-timeout:60}")
+    private int timeout;
+
     // 超时时间（毫秒）
     private static final int DEFAULT_TIMEOUT = 30000;
 
@@ -48,6 +54,11 @@ public class ComfyUIClientUtil {
 
     @PostConstruct
     public void validateConfig() {
+        // 验证超时配置
+        if (timeout <= 0 || timeout > 600) {
+            throw new IllegalArgumentException("ComfyUI超时时间必须在1-600秒之间");
+        }
+
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("ComfyUI base-url不能为空");
         }
@@ -129,15 +140,101 @@ public class ComfyUIClientUtil {
     }
 
     /**
-     * 查询任务状态
-     * @param promptId 任务ID
-     * @return [是否完成, 图片文件名列表]
+     * 查询队列状态
+     * @return 队列状态信息
      */
-    public Map<String, Object> queryTaskStatus(String promptId) {
-        Map<String, Object> result = MapUtil.newHashMap();
-        result.put("finished", false);
-        result.put("images", new ArrayList<String>());
+    public QueueStatusResponse getQueueStatus() {
+        try {
+            HttpResponse response = HttpRequest.get(baseUrl + "/queue")
+                    .timeout(DEFAULT_TIMEOUT)
+                    .execute();
 
+            if (response.getStatus() != 200) {
+                log.warn("查询队列状态失败，状态码: {}", response.getStatus());
+                return QueueStatusResponse.empty();
+            }
+
+            JSONObject queueObj = JSON.parseObject(response.body());
+            QueueStatusResponse result = new QueueStatusResponse();
+            
+            // 解析正在执行的任务
+            JSONObject runningObj = queueObj.getJSONObject("queue_running");
+            if (runningObj != null) {
+                result.setRunning(parseTaskInfos(runningObj.getJSONArray("tasks")));
+            } else {
+                result.setRunning(List.of());
+            }
+            
+            // 解析等待中的任务
+            JSONObject pendingObj = queueObj.getJSONObject("queue_pending");
+            if (pendingObj != null) {
+                result.setPending(parseTaskInfos(pendingObj.getJSONArray("tasks")));
+            } else {
+                result.setPending(List.of());
+            }
+            
+            result.setTotalTasks(result.getRunning().size() + result.getPending().size());
+            result.setSystemStatus(result.getTotalTasks() > 0 ? "busy" : "idle");
+            result.setMaxConcurrentTasks(1); // ComfyUI默认单任务执行
+            
+            return result;
+            
+        } catch (Exception e) {
+            log.error("查询队列状态异常", e);
+            return QueueStatusResponse.empty();
+        }
+    }
+
+    /**
+     * 解析任务信息列表
+     */
+    private List<QueueStatusResponse.TaskInfo> parseTaskInfos(com.alibaba.fastjson2.JSONArray tasksArray) {
+        List<QueueStatusResponse.TaskInfo> taskInfos = new ArrayList<>();
+        if (tasksArray != null) {
+            for (Object taskObj : tasksArray) {
+                JSONObject task = (JSONObject) taskObj;
+                QueueStatusResponse.TaskInfo taskInfo = new QueueStatusResponse.TaskInfo();
+                taskInfo.setPromptId(task.getString("prompt_id"));
+                taskInfo.setTaskType("image_generation");
+                taskInfo.setSubmitTime(task.getLongValue("timestamp"));
+                taskInfo.setStatus("queued");
+                taskInfo.setProgress(0.0);
+                taskInfos.add(taskInfo);
+            }
+        }
+        return taskInfos;
+    }
+
+    /**
+     * 异步提交任务
+     * @param promptStr 提示词
+     * @return 异步任务响应
+     */
+    public AsyncTaskResponse submitTaskAsync(String promptStr) {
+        try {
+            String promptId = submitTask(promptStr);
+            if (StrUtil.isBlank(promptId)) {
+                return AsyncTaskResponse.error("提交任务失败");
+            }
+            
+            // 获取队列位置
+            QueueStatusResponse queueStatus = getQueueStatus();
+            int queuePosition = queueStatus.getPending().size(); // 当前在队尾
+            
+            return AsyncTaskResponse.success(promptId, queuePosition);
+            
+        } catch (Exception e) {
+            log.error("异步提交任务异常", e);
+            return AsyncTaskResponse.error("提交任务异常: " + e.getMessage());
+        }
+    }
+
+    /**
+     * 查询任务状态（改进版）
+     * @param promptId 任务ID
+     * @return 任务状态响应
+     */
+    public TaskStatusResponse queryTaskStatus(String promptId) {
         try {
             HttpResponse response = HttpRequest.get(baseUrl + "/history/" + promptId)
                     .timeout(DEFAULT_TIMEOUT)
@@ -145,12 +242,27 @@ public class ComfyUIClientUtil {
 
             if (response.getStatus() != 200) {
                 log.warn("查询任务状态失败，状态码: {}", response.getStatus());
-                return result;
+                return TaskStatusResponse.running(0.0);
             }
 
             JSONObject historyObj = JSON.parseObject(response.body());
             if (historyObj.isEmpty() || !historyObj.containsKey(promptId)) {
-                return result;
+                // 检查队列状态
+                QueueStatusResponse queueStatus = getQueueStatus();
+                boolean isRunning = queueStatus.getRunning().stream()
+                    .anyMatch(task -> promptId.equals(task.getPromptId()));
+                
+                if (isRunning) {
+                    return TaskStatusResponse.running(50.0); // 执行中
+                } else {
+                    boolean isPending = queueStatus.getPending().stream()
+                        .anyMatch(task -> promptId.equals(task.getPromptId()));
+                    if (isPending) {
+                        return TaskStatusResponse.running(0.0); // 等待中
+                    }
+                }
+                
+                return TaskStatusResponse.error("任务不存在");
             }
 
             // 解析生成的图片列表
@@ -168,12 +280,16 @@ public class ComfyUIClientUtil {
                 }
             }
 
-            result.put("finished", true);
-            result.put("images", imageNames);
+            if (imageNames.isEmpty()) {
+                return TaskStatusResponse.error("任务完成但未生成图片");
+            }
+
+            return TaskStatusResponse.success(imageNames);
+            
         } catch (Exception e) {
-            log.error("查询任务状态异常", e);
+            log.error("查询任务状态异常，promptId: {}", promptId, e);
+            return TaskStatusResponse.error("查询任务状态异常: " + e.getMessage());
         }
-        return result;
     }
 
     /**
@@ -218,11 +334,10 @@ public class ComfyUIClientUtil {
 
     /**
      * 完整生图流程
-     * @param config 生成配置
-     * @param timeout 超时时间（秒）
+
      * @return 本地图片路径列表
      */
-    public List<String> generateImage(String promptStr,int timeout) {
+    public List<String> generateImage(String promptStr) {
         // 1. 提交任务
         String promptId = submitTask(promptStr);
         if (StrUtil.isBlank(promptId)) {
@@ -232,12 +347,11 @@ public class ComfyUIClientUtil {
         // 2. 轮询等待完成
         long startTime = System.currentTimeMillis();
         while (System.currentTimeMillis() - startTime < timeout * 1000L) {
-            Map<String, Object> status = queryTaskStatus(promptId);
-            boolean finished = (boolean) status.get("finished");
+            TaskStatusResponse status = queryTaskStatus(promptId);
+            boolean finished = status.isFinished();
 
             if (finished) {
-                @SuppressWarnings("unchecked")
-                List<String> imageNames = (List<String>) status.get("images");
+                List<String> imageNames = status.getImages();
                 if (imageNames.isEmpty()) {
                     log.warn("任务完成但未生成图片");
                     return Collections.emptyList();
